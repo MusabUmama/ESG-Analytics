@@ -1,0 +1,14 @@
+pandas
+numpy
+scikit-learn
+xgboost
+flask
+flask-sqlalchemy
+psycopg2-binary
+kafka-python
+requests
+spacy
+together
+gunicorn
+plotly
+reportlab
