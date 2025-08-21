@@ -12,3 +12,7 @@ together
 gunicorn
 plotly
 reportlab
+python-dotenv
+seaborn
+matplotlib
+shap
