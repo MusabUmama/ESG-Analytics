@@ -1,11 +1,11 @@
 # src/preprocess_data.py
 import os
-import psycopg2
 import pandas as pd
 import numpy as np
 import logging
 from dotenv import load_dotenv
 import ast
+from sqlalchemy import create_engine, text
 
 # Setup logging
 logging.basicConfig(level=logging.DEBUG, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -31,42 +31,41 @@ except FileNotFoundError as e:
     logger.error(f"CSV file not found: {e}")
     raise
 
-# Log column names for debugging
-logger.debug(f"company_df columns: {list(company_df.columns)}")
-logger.debug(f"esg_df columns: {list(esg_df.columns)}")
-logger.debug(f"financial_df columns: {list(financial_df.columns)}")
-logger.debug(f"portfolio_df columns: {list(portfolio_df.columns)}")
-logger.debug(f"macro_df columns: {list(macro_df.columns)}")
-logger.debug(f"news_social_df columns: {list(news_social_df.columns)}")
-
-# Rename 'ticker' to 'company' in company_df for consistency
 if "ticker" in company_df.columns:
     company_df = company_df.rename(columns={"ticker": "company"})
     logger.info("Renamed 'ticker' to 'company' in company_df")
 
-# Convert stringified 'keywords' to lists
+# Convert keywords from string to list
 try:
-    news_social_df["keywords"] = news_social_df["keywords"].apply(lambda x: ast.literal_eval(x) if isinstance(x, str) else x)
+    news_social_df["keywords"] = news_social_df["keywords"].apply(
+        lambda x: ast.literal_eval(x) if isinstance(x, str) else x
+    )
     logger.info("Converted 'keywords' column to lists")
 except (ValueError, SyntaxError) as e:
     logger.warning(f"Failed to convert some 'keywords' values: {e}")
-    news_social_df["keywords"] = news_social_df["keywords"].apply(lambda x: [] if pd.isna(x) or x == "" else x)
+    news_social_df["keywords"] = news_social_df["keywords"].apply(
+        lambda x: [] if pd.isna(x) or x == "" else x
+    )
 
 # Preprocess data
 try:
-    # Convert dates to datetime
+    # Convert dates
     esg_df["date"] = pd.to_datetime(esg_df["date"])
     financial_df["date"] = pd.to_datetime(financial_df["date"])
     macro_df["date"] = pd.to_datetime(macro_df["date"])
     news_social_df["date"] = pd.to_datetime(news_social_df["date"])
 
-    # Merge data
+    # Merge datasets
     merged_df = esg_df.merge(financial_df, on=["company", "date"], how="left")
     merged_df = merged_df.merge(portfolio_df, on=["company", "sector"], how="left")
     merged_df = merged_df.merge(macro_df, on=["date"], how="left")
     merged_df = merged_df.merge(company_df, on=["company", "sector"], how="left")
 
-    # Handle missing values
+    # Ensure region exists
+    if "region" not in merged_df.columns:
+        merged_df["region"] = "Unknown"
+
+    # Fill missing values
     merged_df.fillna({
         "carbon_emissions": merged_df["carbon_emissions"].mean(),
         "diversity_ratio": merged_df["diversity_ratio"].mean(),
@@ -82,75 +81,81 @@ try:
         "interest_rate": merged_df["interest_rate"].mean()
     }, inplace=True)
 
-    # Aggregate news/social data
+    # Aggregate news/social
     news_social_agg = news_social_df.groupby(["company", "date"]).agg({
         "sentiment": "mean",
         "keywords": lambda x: list(set([item for sublist in x if isinstance(sublist, list) for item in sublist]))
     }).reset_index()
+
     merged_df = merged_df.merge(news_social_agg, on=["company", "date"], how="left")
     merged_df["sentiment"] = merged_df["sentiment"].fillna(0)
+    merged_df["keywords"] = merged_df["keywords"].apply(lambda x: ",".join(x) if isinstance(x, list) else "")
 
-    # Save merged data
+    # -----------------------------
+    # Feature Engineering
+    # -----------------------------
+    merged_df["carbon_cost_est"] = merged_df["carbon_tax_rate"] * merged_df["carbon_emissions"]
+    merged_df["sentiment_missing"] = merged_df["sentiment"].isna().astype(int)
+    merged_df["log_carbon_emissions"] = np.log1p(merged_df["carbon_emissions"])
+    merged_df["log_close_price"] = np.log1p(merged_df["close_price"])
+    merged_df["log_investment_value"] = np.log1p(merged_df["investment_value"])
+    merged_df["vol_x_dte"] = merged_df["volatility"] * merged_df["debt_to_equity"]
+    merged_df["keywords_len"] = merged_df["keywords"].apply(lambda x: len(x.split(",")) if isinstance(x, str) else 0)
+
     os.makedirs("data", exist_ok=True)
     merged_df.to_csv("data/merged_data.csv", index=False)
-    logger.info("Generated data/merged_data.csv")
+    logger.info("Generated data/merged_data.csv with engineered features")
 except Exception as e:
     logger.error(f"Error during preprocessing: {e}")
     raise
 
-# Connect to Supabase
+# Push to Supabase
 try:
-    conn = psycopg2.connect(DATABASE_URL)
-    cursor = conn.cursor()
-    logger.info("Connected to Supabase")
+    engine = create_engine(DATABASE_URL)
+    with engine.begin() as conn:
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS esg_data (
+                id SERIAL PRIMARY KEY,
+                company VARCHAR(20),
+                sector VARCHAR(50),
+                date TIMESTAMP,
+                carbon_emissions FLOAT,
+                diversity_ratio FLOAT,
+                governance_score FLOAT,
+                risk_score FLOAT,
+                close_price FLOAT,
+                volatility FLOAT,
+                debt_to_equity FLOAT,
+                portfolio_weight FLOAT,
+                investment_value FLOAT,
+                carbon_tax_rate FLOAT,
+                climate_risk_index FLOAT,
+                interest_rate FLOAT,
+                sentiment FLOAT,
+                keywords TEXT,
+                region TEXT,
+                name TEXT,
+                carbon_cost_est FLOAT,
+                sentiment_missing INT,
+                log_carbon_emissions FLOAT,
+                log_close_price FLOAT,
+                log_investment_value FLOAT,
+                vol_x_dte FLOAT,
+                keywords_len INT
+            );
+        """))
 
-    # Create table
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS esg_data (
-            id SERIAL PRIMARY KEY,
-            company VARCHAR(10),
-            sector VARCHAR(50),
-            date TIMESTAMP,
-            carbon_emissions FLOAT,
-            diversity_ratio FLOAT,
-            governance_score FLOAT,
-            risk_score FLOAT,
-            close_price FLOAT,
-            volatility FLOAT,
-            debt_to_equity FLOAT,
-            portfolio_weight FLOAT,
-            investment_value FLOAT,
-            carbon_tax_rate FLOAT,
-            climate_risk_index FLOAT,
-            interest_rate FLOAT,
-            sentiment FLOAT
-        );
-    """)
+        conn.execute(text("TRUNCATE esg_data;"))
 
-    # Insert data
-    for _, row in merged_df.iterrows():
-        cursor.execute("""
-            INSERT INTO esg_data (
-                company, sector, date, carbon_emissions, diversity_ratio, governance_score,
-                risk_score, close_price, volatility, debt_to_equity, portfolio_weight,
-                investment_value, carbon_tax_rate, climate_risk_index, interest_rate, sentiment
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s);
-        """, (
-            row["company"], row["sector"], row["date"], row["carbon_emissions"],
-            row["diversity_ratio"], row["governance_score"], row["risk_score"],
-            row["close_price"], row["volatility"], row["debt_to_equity"],
-            row["portfolio_weight"], row["investment_value"], row["carbon_tax_rate"],
-            row["climate_risk_index"], row["interest_rate"], row["sentiment"]
-        ))
-
-    conn.commit()
-    logger.info("Inserted data into Supabase")
+    merged_df.to_sql(
+        "esg_data",
+        engine,
+        if_exists="append",
+        index=False,
+        method="multi",
+        chunksize=500
+    )
+    logger.info("Inserted data with engineered features into Supabase successfully")
 except Exception as e:
-    logger.error(f"Failed to connect or insert into Supabase: {e}")
+    logger.error(f"Failed to insert into Supabase: {e}")
     raise
-finally:
-    if cursor:
-        cursor.close()
-    if conn:
-        conn.close()
-    logger.info("Closed Supabase connection")

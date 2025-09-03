@@ -1,0 +1,195 @@
+{% extends "base.html" %}
+{% block content %}
+
+<h2 class="mb-4">ESG Dashboard</h2>
+
+<!-- Company selection as cards -->
+<div class="company-selector">
+  {% for c in companies %}
+    <a href="/?company={{ c }}" class="company-card {% if c == selected_company %}active{% endif %}">
+      {{ c }}
+    </a>
+  {% endfor %}
+</div>
+
+<!-- KPI cards -->
+<div class="kpi-cards">
+  <div class="card">🤖 Predicted Risk: <b>{{ predicted_risk }}</b></div>
+  <div class="card">📊 Avg ESG Score: <b>{{ avg_esg_score }}</b></div>
+  <div class="card">🌍 Carbon: <b>{{ total_carbon }}</b></div>
+  <div class="card">🚨 Active Alerts: <b>{{ active_alerts }}</b></div>
+</div>
+
+<!-- Company trend charts -->
+<div class="charts-row">
+  <div class="chart-container">
+    <canvas id="esgChart"></canvas>
+  </div>
+  <div class="chart-container">
+    <canvas id="carbonChart"></canvas>
+  </div>
+</div>
+
+<hr>
+
+<!-- Portfolio-level charts -->
+<div class="charts-row">
+  <div class="chart-container">
+    <canvas id="esgDistChart"></canvas>
+  </div>
+  <div class="chart-container">
+    <canvas id="regionDistChart"></canvas>
+  </div>
+</div>
+
+<hr>
+
+<!-- Company table -->
+<h3>Company Data</h3>
+<table>
+  <thead>
+    <tr>
+      <th>Company</th><th>Sector</th><th>Region</th>
+      <th>Avg ESG</th><th>Carbon</th><th>Governance</th><th>Diversity</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for row in df %}
+      <tr>
+        <td>{{ row.company }}</td>
+        <td>{{ row.sector }}</td>
+        <td>{{ row.region }}</td>
+        <td>{{ row.avg_esg_score }}</td>
+        <td>{{ row.carbon_emissions }}</td>
+        <td>{{ row.governance_score }}</td>
+        <td>{{ row.diversity_score }}</td>
+      </tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+<!-- Chart.js -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script>
+document.addEventListener("DOMContentLoaded", function () {
+  const dates = JSON.parse('{{ dates | tojson | safe }}');
+  const esgScores = JSON.parse('{{ esg_scores | tojson | safe }}');
+  const carbonData = JSON.parse('{{ carbon_data | tojson | safe }}');
+  const esgDistribution = JSON.parse('{{ esg_distribution | tojson | safe }}');
+  const regionDistribution = JSON.parse('{{ region_distribution | tojson | safe }}');
+
+  // ESG Trend (selected company)
+  new Chart(document.getElementById("esgChart"), {
+    type: "line",
+    data: {
+      labels: dates,
+      datasets: [{
+        label: "ESG Score",
+        data: esgScores,
+        borderColor: "#4DB6FF",
+        backgroundColor: "rgba(77,182,255,0.2)",
+        tension: 0.25,
+        fill: true
+      }]
+    }
+  });
+
+  // Carbon Trend (selected company)
+  new Chart(document.getElementById("carbonChart"), {
+    type: "bar",
+    data: {
+      labels: dates,
+      datasets: [{
+        label: "Carbon Emissions",
+        data: carbonData,
+        backgroundColor: "#1E88E5"
+      }]
+    }
+  });
+
+  // ESG Distribution by sector
+  new Chart(document.getElementById("esgDistChart"), {
+    type: "bar",
+    data: {
+      labels: Object.keys(esgDistribution),
+      datasets: [{
+        label: "Avg ESG by Sector",
+        data: Object.values(esgDistribution),
+        backgroundColor: "#43A047"
+      }]
+    }
+  });
+
+  // Region distribution
+  new Chart(document.getElementById("regionDistChart"), {
+    type: "pie",
+    data: {
+      labels: Object.keys(regionDistribution),
+      datasets: [{
+        data: Object.values(regionDistribution),
+        backgroundColor: ["#1E88E5", "#F4511E", "#6A1B9A", "#FDD835"]
+      }]
+    }
+  });
+});
+</script>
+
+<style>
+.company-selector {
+  display: flex;
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+  flex-wrap: wrap;
+}
+.company-card {
+  padding: 0.75rem 1.25rem;
+  border: 1px solid #ccc;
+  border-radius: 12px;
+  text-decoration: none;
+  color: black;
+  background: #b9b1b1;
+  transition: all 0.2s;
+}
+.company-card:hover { background: #e3f2fd; }
+.company-card.active { background: #2196F3; color: white; font-weight: bold; }
+
+.kpi-cards {
+  display: flex;
+  gap: 1rem;
+  margin-bottom: 2rem;
+  flex-wrap: wrap;
+}
+.kpi-cards .card {
+  flex: 1;
+  padding: 1rem;
+  background: #010101;
+  border-radius: 12px;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+.charts-row {
+  display: flex;
+  gap: 2rem;
+  flex-wrap: wrap;
+  margin-bottom: 2rem;
+}
+.chart-container {
+  flex: 1;
+  min-width: 300px;
+  min-height: 260px;
+}
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 1rem;
+}
+table th, table td {
+  border: 1px solid #ddd;
+  padding: 0.5rem;
+}
+table th {
+  background: #f0f0f0;
+}
+</style>
+
+{% endblock %}

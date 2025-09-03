@@ -46,7 +46,6 @@ logger.info("Generated data/companies.csv")
 # Helper function to extract JSON from response
 def extract_json(text):
     try:
-        # Extract content between first { and last }
         match = re.search(r'\{[\s\S]*?\}', text)
         if match:
             json_str = match.group(0)

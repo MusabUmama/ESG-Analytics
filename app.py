@@ -1,138 +1,137 @@
 # app.py
 from flask import Flask, render_template, request, send_file
 import pandas as pd
-import psycopg2
-import plotly.express as px
-import plotly.io as pio
 import joblib
-import os
-from kafka import KafkaConsumer
-import json
-from configparser import ConfigParser
-import logging
-from dotenv import load_dotenv
-
-# Load .env file
-load_dotenv()
-
-# Setup logging
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-logger = logging.getLogger(__name__)
+from io import BytesIO
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+from reportlab.lib.styles import getSampleStyleSheet
 
 app = Flask(__name__)
 
-def load_config(filename="config/database.ini", section="postgresql"):
-    parser = ConfigParser()
-    parser.read(filename)
-    config = {}
-    if parser.has_section(section):
-        for item in parser.items(section):
-            config[item[0]] = os.getenv(item[1].strip("%"), item[1].strip("%"))
-    else:
-        raise Exception(f"Section {section} not found in {filename}")
-    return config
+# Load dataset + trained model
+data = pd.read_csv("data/merged_data.csv")
+model = joblib.load("models/esg_risk_model.pkl")
 
-@app.route("/", methods=["GET", "POST"])
-def index():
-    try:
-        conn = psycopg2.connect(os.getenv("DATABASE_URL", load_config()["uri"]))
-        logger.info("Connected to Supabase")
-    except Exception as e:
-        logger.error(f"Failed to connect to Supabase: {e}")
-        return {"error": "Database connection failed"}, 500
+EXPECTED_FEATURES = list(model.named_steps["prep"].feature_names_in_)
 
-    try:
-        data = pd.read_sql("SELECT * FROM esg_data", conn)
-        sectors = data["sector"].unique()
-        sector = request.form.get("sector", sectors[0])
-        companies = data[data["sector"] == sector]["company"].unique()
-        company = request.form.get("company", companies[0])
+companies = sorted(data["company"].unique())
+sectors = sorted(data["sector"].unique())
 
-        # Risk score
-        model = joblib.load("models/esg_risk_model.pkl")
-        company_data = data[data["company"] == company]
-        news_data = pd.read_sql("SELECT sentiment FROM news_social_data WHERE company = %s", conn, params=(company,))
-        features = company_data[["carbon_emissions", "diversity_ratio", "governance_score"]].iloc[-1:]
-        features["sentiment"] = news_data["sentiment"].mean() if not news_data.empty else 0
-        features["volatility"] = pd.read_sql("SELECT volatility FROM financial_data WHERE company = %s", conn, params=(company,))["volatility"].mean()
-        features["carbon_tax_rate"] = pd.read_sql("SELECT carbon_tax_rate FROM macro_data", conn)["carbon_tax_rate"].mean()
-        risk_score = model.predict(features)[0]
+def get_features_for_company(company: str):
+    """Return latest feature row for a company as a DataFrame with correct columns."""
+    row = data[data["company"] == company].sort_values("date").tail(1)
+    if row.empty:
+        return None
+    return row[EXPECTED_FEATURES]
 
-        # Radar chart
-        fig = px.line_polar(
-            r=[company_data["carbon_emissions"].mean(), company_data["diversity_ratio"].mean() * 100, company_data["governance_score"].mean()],
-            theta=["Environmental", "Social", "Governance"],
-            line_close=True
-        )
-        radar_chart = pio.to_html(fig, full_html=False)
+# --- Routes ---
 
-        # Sentiment trend
-        news_data = pd.read_sql("SELECT date, sentiment FROM news_social_data WHERE company = %s", conn, params=(company,))
-        fig = px.line(news_data, x="date", y="sentiment")
-        trend_chart = pio.to_html(fig, full_html=False)
+@app.route("/")
+def dashboard():
+    company = request.args.get("company", companies[0])
+    sector = request.args.get("sector", sectors[0])
 
-        conn.close()
-        logger.info(f"Rendered dashboard for {company}")
-        return render_template("index.html", sectors=sectors, companies=companies, sector=sector, company=company,
-                              risk_score=risk_score, radar_chart=radar_chart, trend_chart=trend_chart)
-    except Exception as e:
-        logger.error(f"Failed to process dashboard: {e}")
-        conn.close()
-        return {"error": "Dashboard processing failed"}, 500
+    # KPIs
+    avg_esg_score = round(data[data["sector"] == sector]["risk_score"].mean(), 2)
+    total_carbon = round(data[data["sector"] == sector]["carbon_emissions"].sum(), 2)
+    active_alerts = len(data[data["risk_score"] < 40])
 
-@app.route("/alerts/<company>")
-def alerts(company):
-    try:
-        consumer = KafkaConsumer(
-            os.getenv("KAFKA_TOPIC", "esg_topic"),
-            bootstrap_servers=os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092"),
-            security_protocol=os.getenv("KAFKA_SECURITY_PROTOCOL", "SASL_SSL"),
-            sasl_mechanism=os.getenv("KAFKA_SASL_MECHANISM", "SCRAM-SHA-256"),
-            sasl_plain_username=os.getenv("KAFKA_SASL_USERNAME", ""),
-            sasl_plain_password=os.getenv("KAFKA_SASL_PASSWORD", ""),
-            group_id=f"esg_alerts_{company}"
-        )
-        logger.info(f"Connected to Redpanda for {company} alerts")
-        alerts = []
-        for message in consumer:
-            news = json.loads(message.value.decode("utf-8"))
-            if news["company"] == company and news["sentiment"] < -0.5:
-                alerts.append(f"Alert: Negative sentiment for {company}: {news['text']}")
-            if len(alerts) >= 5:  # Limit for demo
-                break
-        logger.info(f"Fetched {len(alerts)} alerts for {company}")
-        return {"alerts": alerts}
-    except Exception as e:
-        logger.error(f"Failed to fetch alerts for {company}: {e}")
-        return {"error": "Failed to fetch alerts"}, 500
+    # Chart data (time series)
+    filtered = data[data["company"] == company].sort_values("date")
+    dates = filtered["date"].tolist()
+    esg_scores = filtered["risk_score"].tolist()
+    carbon_data = filtered["carbon_emissions"].tolist()
 
-@app.route("/report/<company>")
-def generate_report(company):
-    try:
-        conn = psycopg2.connect(os.getenv("DATABASE_URL", load_config()["uri"]))
-        data = pd.read_sql("SELECT * FROM esg_data WHERE company = %s", conn, params=(company,))
-        model = joblib.load("models/esg_risk_model.pkl")
-        features = data[["carbon_emissions", "diversity_ratio", "governance_score"]].iloc[-1:]
-        risk_score = model.predict(features)[0]
+    # Predicted Risk Score
+    features = get_features_for_company(company)
+    predicted_risk = model.predict(features)[0] if features is not None else None
 
-        pdf_file = f"reports/{company}_esg_report.pdf"
-        os.makedirs("reports", exist_ok=True)
-        from reportlab.lib.pagesizes import letter
-        from reportlab.pdfgen import canvas
-        c = canvas.Canvas(pdf_file, pagesize=letter)
-        c.drawString(100, 750, f"ESG Risk Report for {company}")
-        c.drawString(100, 730, f"Risk Score: {risk_score:.2f}")
-        c.drawImage("static/shap_summary.png", 100, 500, width=400, height=200)
-        c.save()
+    # Portfolio-level distributions
+    esg_distribution = (
+        data.groupby("sector")["risk_score"].mean().to_dict()
+        if "sector" in data.columns and "risk_score" in data.columns else {}
+    )
 
-        conn.close()
-        logger.info(f"Generated report for {company}")
-        return send_file(pdf_file, as_attachment=True)
-    except Exception as e:
-        logger.error(f"Failed to generate report for {company}: {e}")
-        if 'conn' in locals():
-            conn.close()
-        return {"error": "Report generation failed"}, 500
+    region_distribution = (
+        data.groupby("region")["company"].nunique().to_dict()
+        if "region" in data.columns else {}
+    )
+
+    # Company-level summary table
+    df = (
+        data.sort_values("date")
+        .groupby("company")
+        .tail(1)[["company", "sector", "region", "risk_score", "carbon_emissions", "governance_score", "diversity_ratio"]]
+        .reset_index(drop=True)
+        .rename(columns={
+            "risk_score": "avg_esg_score",
+            "diversity_ratio": "diversity_score"
+        })
+        .to_dict(orient="records")
+    )
+
+    return render_template(
+        "dashboard.html",
+        companies=companies,
+        sectors=sectors,
+        avg_esg_score=avg_esg_score,
+        total_carbon=total_carbon,
+        active_alerts=active_alerts,
+        dates=dates,
+        esg_scores=esg_scores,
+        carbon_data=carbon_data,
+        predicted_risk=round(predicted_risk, 2) if predicted_risk is not None else "N/A",
+        selected_company=company,
+        esg_distribution=esg_distribution,
+        region_distribution=region_distribution,
+        df=df
+    )
+
+@app.route("/compare")
+def compare():
+    c1 = request.args.get("c1", companies[0])
+    c2 = request.args.get("c2", companies[1])
+
+    f1 = get_features_for_company(c1)
+    f2 = get_features_for_company(c2)
+
+    pred1 = model.predict(f1)[0] if f1 is not None else None
+    pred2 = model.predict(f2)[0] if f2 is not None else None
+
+    return render_template(
+        "compare.html",
+        companies=companies,
+        c1=c1, c2=c2,
+        pred1=round(pred1, 2) if pred1 is not None else "N/A",
+        pred2=round(pred2, 2) if pred2 is not None else "N/A"
+    )
+
+@app.route("/alerts")
+def alerts():
+    alerts = data[data["risk_score"] < 40][["company", "sector", "risk_score", "carbon_emissions"]]
+    return render_template("alerts.html", tables=alerts.to_dict(orient="records"))
+
+@app.route("/report")
+def report():
+    return render_template("report.html")
+
+@app.route("/download_report")
+def download_report():
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(buffer)
+    styles = getSampleStyleSheet()
+    story = []
+
+    story.append(Paragraph("Risk Report", styles["Title"]))
+    story.append(Spacer(1, 12))
+    story.append(Paragraph(f"Total Companies: {len(companies)}", styles["Normal"]))
+    story.append(Paragraph(f"Total Sectors: {len(sectors)}", styles["Normal"]))
+    story.append(Paragraph(f"Average Risk Score: {round(data['risk_score'].mean(),2)}", styles["Normal"]))
+    story.append(Paragraph(f"Alerts (Risk Score < 40): {len(data[data['risk_score']<40])}", styles["Normal"]))
+
+    doc.build(story)
+    buffer.seek(0)
+    return send_file(buffer, as_attachment=True, download_name="Risk_Report.pdf", mimetype="application/pdf")
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
+    app.run(debug=True)

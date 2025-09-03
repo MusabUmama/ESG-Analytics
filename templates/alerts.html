@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block content %}
+
+<h2 class="mb-4">🚨 Active Alerts</h2>
+<p>Companies with ESG Risk Score below 40</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>Company</th>
+      <th>Sector</th>
+      <th>ESG Score</th>
+      <th>Carbon Emissions</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for row in tables %}
+      <tr>
+        <td>{{ row.company }}</td>
+        <td>{{ row.sector }}</td>
+        <td>{{ row.risk_score }}</td>
+        <td>{{ row.carbon_emissions }}</td>
+      </tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+<style>
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 1rem;
+}
+table th, table td {
+  border: 1px solid #ddd;
+  padding: 0.5rem;
+}
+table th {
+  background: #f0f0f0;
+}
+</style>
+
+{% endblock %}

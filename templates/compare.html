@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block content %}
+
+<h2 class="mb-4">Company Comparison</h2>
+
+<form method="get" action="/compare" class="compare-form">
+  <label for="c1">Select Company 1:</label>
+  <select name="c1" id="c1">
+    {% for c in companies %}
+      <option value="{{ c }}" {% if c == c1 %}selected{% endif %}>{{ c }}</option>
+    {% endfor %}
+  </select>
+
+  <label for="c2">Select Company 2:</label>
+  <select name="c2" id="c2">
+    {% for c in companies %}
+      <option value="{{ c }}" {% if c == c2 %}selected{% endif %}>{{ c }}</option>
+    {% endfor %}
+  </select>
+
+  <button type="submit">Compare</button>
+</form>
+
+<div class="comparison-results">
+  <div class="company-box">
+    <h3>{{ c1 }}</h3>
+    <p>Predicted ESG Risk Score: <b>{{ pred1 }}</b></p>
+  </div>
+  <div class="company-box">
+    <h3>{{ c2 }}</h3>
+    <p>Predicted ESG Risk Score: <b>{{ pred2 }}</b></p>
+  </div>
+</div>
+
+<style>
+.compare-form {
+  margin-bottom: 2rem;
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.comparison-results {
+  display: flex;
+  gap: 2rem;
+  flex-wrap: wrap;
+}
+.company-box {
+  flex: 1;
+  padding: 1rem;
+  border: 1px solid #ddd;
+  border-radius: 12px;
+  background: #000000;
+  text-align: center;
+}
+</style>
+
+{% endblock %}
