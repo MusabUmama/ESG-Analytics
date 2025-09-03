@@ -2,7 +2,7 @@
 
 This project implements a predictive system to assess Environmental, Social, and Governance (ESG) risk scores for companies using machine learning. It integrates data from various sources, preprocesses it, trains a model, streams results to Redpanda Cloud, and provides a Flask-based web interface.
 
-Dashboard ()
+![Dashboard](https://github.com/MusabUmama/ESG-Analytics/blob/main/Dashboard.png)
 
 ## Features
 
